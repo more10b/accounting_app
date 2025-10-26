@@ -39,8 +39,6 @@ def get_credentials():
     sheet = gc.open(st.secrets["general"]["SHEET_NAME"]).sheet1
     return creds, drive_service, sheet
 
-creds, drive_service, sheet = get_credentials()
-
 def get_or_create_sheet(gc):
     """Return the Google Sheet object, create it if missing."""
     try:
@@ -121,3 +119,4 @@ if submitted:
         if drive_link:
 
             st.link_button("Open uploaded file in Drive", drive_link)
+
