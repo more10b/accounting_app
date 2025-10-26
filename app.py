@@ -3,7 +3,6 @@ from datetime import datetime
 import streamlit as st
 import pandas as pd
 import gspread
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from gspread.exceptions import SpreadsheetNotFound
@@ -36,10 +35,8 @@ def get_credentials():
 
     drive_service = build("drive", "v3", credentials=creds)
     gc = gspread.authorize(creds)
-    sheet = gc.open(st.secrets["general"]["SHEET_NAME"]).sheet1
-    return creds, drive_service, sheet
+    return creds, drive_service, gc
 
-creds, drive_service, gc = get_credentials()
 
 def get_or_create_sheet(gc):
     """Open the target sheet; create it if missing."""
@@ -48,17 +45,16 @@ def get_or_create_sheet(gc):
         return gc.open(sheet_name).sheet1
     except gspread.SpreadsheetNotFound:
         sh = gc.create(sheet_name)
-        sh.share(None, perm_type="anyone", role="reader")
-        worksheet = sh.get_worksheet(0)
+        worksheet = sh.sheet1
         worksheet.append_row(["Timestamp", "Date", "Amount", "Currency",
                               "Category", "Notes", "DriveLink"])
         return worksheet
-        
-sheet = get_or_create_sheet(gc)
 
-# --- Setup connections ---
+
+# ✅ Setup connections once
 creds, drive_service, gc = get_credentials()
 sheet = get_or_create_sheet(gc)
+
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="Receipt Uploader", page_icon="📸", layout="centered")
@@ -78,12 +74,14 @@ with st.form("receipt_form"):
         notes = st.text_area("Notes (optional)")
     submitted = st.form_submit_button("💾 Save Entry")
 
+
 def guess_mime_type(name: str) -> str:
     name = name.lower()
     if name.endswith(".pdf"): return "application/pdf"
     if name.endswith(".png"): return "image/png"
     if name.endswith(".jpg") or name.endswith(".jpeg"): return "image/jpeg"
     return "application/octet-stream"
+
 
 def upload_to_drive(file_bytes: bytes, filename: str, mimetype: str) -> str:
     metadata = {"name": filename, "parents": [DRIVE_FOLDER_ID]}
@@ -95,6 +93,7 @@ def upload_to_drive(file_bytes: bytes, filename: str, mimetype: str) -> str:
         fileId=created["id"], body={"role": "reader", "type": "anyone"}
     ).execute()
     return created["webViewLink"]
+
 
 if submitted:
     if not amount or not category:
@@ -122,7 +121,4 @@ if submitted:
             columns=["Timestamp","Date","Amount","Currency",
                      "Category","Notes","DriveLink"]))
         if drive_link:
-
             st.link_button("Open uploaded file in Drive", drive_link)
-
-
