@@ -1,0 +1,128 @@
+import io
+from datetime import datetime
+import streamlit as st
+import pandas as pd
+import gspread
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+from gspread.exceptions import SpreadsheetNotFound
+
+# --- CONFIG ---
+SHEET_NAME = "Receipt_Entries"
+DRIVE_FOLDER_ID = "10oc7gQhwLPKCdU7XlxizhzztdY7SoPYi"
+
+# --- Google OAuth setup ---
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/spreadsheets"
+]
+
+def get_credentials():
+    """Authenticate once and cache token for reuse (stored outside OneDrive)."""
+    import os
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    # Store token in your Windows home folder (e.g. C:\Users\morte)
+    token_path = os.path.expanduser("~/.receipt_uploader_token.json")
+    creds = None
+
+    # Load the token if it already exists
+    if os.path.exists(token_path):
+        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+
+    # If there’s no valid token, run the OAuth flow
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file("oauth_credentials.json", SCOPES)
+            creds = flow.run_local_server(port=0)
+        # Save the token for next time
+        with open(token_path, "w") as token:
+            token.write(creds.to_json())
+
+    drive_service = build("drive", "v3", credentials=creds)
+    gc = gspread.authorize(creds)
+    return creds, drive_service, gc
+
+def get_or_create_sheet(gc):
+    """Return the Google Sheet object, create it if missing."""
+    try:
+        sheet = gc.open(SHEET_NAME).sheet1
+    except SpreadsheetNotFound:
+        sh = gc.create(SHEET_NAME)
+        sh.share(None, perm_type="anyone", role="writer")  # allow editing by OAuth account
+        sheet = sh.sheet1
+        sheet.append_row(["Timestamp", "Date", "Amount", "Currency",
+                          "Category", "Notes", "DriveLink"])
+    return sheet
+
+# --- Setup connections ---
+creds, drive_service, gc = get_credentials()
+sheet = get_or_create_sheet(gc)
+
+# --- Streamlit UI ---
+st.set_page_config(page_title="Receipt Uploader", page_icon="📸", layout="centered")
+st.title("📸 Receipt Uploader")
+st.caption("Upload receipts (PDF or image) directly to Google Drive and record entries in Google Sheets.")
+
+uploaded_file = st.file_uploader("Upload receipt (PDF or image)", type=["pdf", "png", "jpg", "jpeg"])
+
+with st.form("receipt_form"):
+    c1, c2 = st.columns(2)
+    with c1:
+        tx_date = st.date_input("Date", datetime.today())
+        amount = st.text_input("Amount (e.g. 45.60)")
+        currency = st.text_input("Currency", "USD")
+    with c2:
+        category = st.text_input("Category", "e.g. Travel, Meals, Office")
+        notes = st.text_area("Notes (optional)")
+    submitted = st.form_submit_button("💾 Save Entry")
+
+def guess_mime_type(name: str) -> str:
+    name = name.lower()
+    if name.endswith(".pdf"): return "application/pdf"
+    if name.endswith(".png"): return "image/png"
+    if name.endswith(".jpg") or name.endswith(".jpeg"): return "image/jpeg"
+    return "application/octet-stream"
+
+def upload_to_drive(file_bytes: bytes, filename: str, mimetype: str) -> str:
+    metadata = {"name": filename, "parents": [DRIVE_FOLDER_ID]}
+    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mimetype, resumable=False)
+    created = drive_service.files().create(
+        body=metadata, media_body=media, fields="id, webViewLink"
+    ).execute()
+    drive_service.permissions().create(
+        fileId=created["id"], body={"role": "reader", "type": "anyone"}
+    ).execute()
+    return created["webViewLink"]
+
+if submitted:
+    if not amount or not category:
+        st.error("Please enter at least an Amount and Category.")
+    else:
+        drive_link = ""
+        if uploaded_file:
+            file_bytes = uploaded_file.read()
+            mimetype = guess_mime_type(uploaded_file.name)
+            unique_name = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_{uploaded_file.name}"
+            drive_link = upload_to_drive(file_bytes, unique_name, mimetype)
+
+        new_row = [
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            str(tx_date),
+            amount,
+            currency,
+            category,
+            notes,
+            drive_link,
+        ]
+        sheet.append_row(new_row)
+        st.success("✅ Entry saved to Google Sheets!")
+        st.dataframe(pd.DataFrame([new_row],
+            columns=["Timestamp","Date","Amount","Currency",
+                     "Category","Notes","DriveLink"]))
+        if drive_link:
+            st.link_button("Open uploaded file in Drive", drive_link)
