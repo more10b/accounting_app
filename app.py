@@ -7,6 +7,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from gspread.exceptions import SpreadsheetNotFound
+from google.oauth2.credentials import Credentials
 
 # --- CONFIG ---
 SHEET_NAME = "Receipt_Entries"
@@ -19,33 +20,26 @@ SCOPES = [
 ]
 
 def get_credentials():
-    """Authenticate once and cache token for reuse (stored outside OneDrive)."""
-    import os
-    from google.auth.transport.requests import Request
-    from google.oauth2.credentials import Credentials
+    """Authenticate via Streamlit Cloud secrets."""
+    google_secrets = st.secrets["google"]
 
-    # Store token in your Windows home folder (e.g. C:\Users\morte)
-    token_path = os.path.expanduser("~/.receipt_uploader_token.json")
-    creds = None
-
-    # Load the token if it already exists
-    if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-
-    # If there’s no valid token, run the OAuth flow
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file("oauth_credentials.json", SCOPES)
-            creds = flow.run_local_server(port=0)
-        # Save the token for next time
-        with open(token_path, "w") as token:
-            token.write(creds.to_json())
+    creds = Credentials.from_authorized_user_info(
+        {
+            "client_id": google_secrets["client_id"],
+            "client_secret": google_secrets["client_secret"],
+            "refresh_token": google_secrets["refresh_token"],
+            "token_uri": google_secrets["token_uri"],
+            "type": google_secrets["type"],
+        },
+        SCOPES,
+    )
 
     drive_service = build("drive", "v3", credentials=creds)
     gc = gspread.authorize(creds)
-    return creds, drive_service, gc
+    sheet = gc.open(st.secrets["general"]["SHEET_NAME"]).sheet1
+    return creds, drive_service, sheet
+
+creds, drive_service, sheet = get_credentials()
 
 def get_or_create_sheet(gc):
     """Return the Google Sheet object, create it if missing."""
@@ -125,4 +119,5 @@ if submitted:
             columns=["Timestamp","Date","Amount","Currency",
                      "Category","Notes","DriveLink"]))
         if drive_link:
+
             st.link_button("Open uploaded file in Drive", drive_link)
