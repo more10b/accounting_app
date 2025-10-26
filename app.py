@@ -39,17 +39,22 @@ def get_credentials():
     sheet = gc.open(st.secrets["general"]["SHEET_NAME"]).sheet1
     return creds, drive_service, sheet
 
+creds, drive_service, gc = get_credentials()
+
 def get_or_create_sheet(gc):
-    """Return the Google Sheet object, create it if missing."""
+    """Open the target sheet; create it if missing."""
+    sheet_name = st.secrets["general"]["SHEET_NAME"]
     try:
-        sheet = gc.open(SHEET_NAME).sheet1
-    except SpreadsheetNotFound:
-        sh = gc.create(SHEET_NAME)
-        sh.share(None, perm_type="anyone", role="writer")  # allow editing by OAuth account
-        sheet = sh.sheet1
-        sheet.append_row(["Timestamp", "Date", "Amount", "Currency",
-                          "Category", "Notes", "DriveLink"])
-    return sheet
+        return gc.open(sheet_name).sheet1
+    except gspread.SpreadsheetNotFound:
+        sh = gc.create(sheet_name)
+        sh.share(None, perm_type="anyone", role="reader")
+        worksheet = sh.get_worksheet(0)
+        worksheet.append_row(["Timestamp", "Date", "Amount", "Currency",
+                              "Category", "Notes", "DriveLink"])
+        return worksheet
+        
+sheet = get_or_create_sheet(gc)
 
 # --- Setup connections ---
 creds, drive_service, gc = get_credentials()
@@ -119,4 +124,5 @@ if submitted:
         if drive_link:
 
             st.link_button("Open uploaded file in Drive", drive_link)
+
 
